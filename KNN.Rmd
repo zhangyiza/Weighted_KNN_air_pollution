@@ -1,12 +1,13 @@
 ---
 title: "Weighted KNN for air pollution data"
-author: "yingzhi"
 ---
-Weighted k-Nearest Neighbor is used to model the air pollution data. PM2.5 is predicted with the k nearest training set vectors (according to Minkowski distance). Kernel functions are used to weight the neighbors according to their distances.
+Weighted k-Nearest Neighbor is used to model the air pollution data. PM2.5 is predicted with the k nearest training set vectors (according to Minkowski distance). Kernel functions are used to weight the neighbors according to their distances.  
+Both location and time are considered as features in this model. Actually, this model is similar to some space and time series model in some condition. This model can also serve as a smooth algorithm by space and time.
+<p>
 
 ##Step 1: Preprocessing
-UMT_time is converted to timestamp(POSIXct). Also, subsetting by time and space can be done for further analysis.
-```{r preprocess}
+*UMT_time* is converted to timestamp(POSIXct). Also, subsetting by time and space can be done for further analysis.
+```{r, message = FALSE}
 #import the datase
 total_data<-read.csv('./data/airdata.csv', encoding = 'UTF-8')
 #convert UMT_time to timestamp
@@ -21,56 +22,78 @@ subarea_week_data<-subarea_data[subarea_data$UMT_time>=as.numeric(as.POSIXct("20
 subarea_month_data<-subarea_data[subarea_data$UMT_time>=as.numeric(as.POSIXct("20141101000000", format = "%Y%m%d%H%M%S"))&subarea_data$UMT_time<as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S")),]
 ```
 
-##Step 2: Build KNN
-First, we only consider three features: *Longitude*, *Latitude* and *UMT_time*.  The goal is to predict PM2.5 with data at least 24 hours ago. Also, please notice that we only get data in  limited locations in China(1000+ monitor points).
-**Step2.1:** Some configurations are needed. Basically, these are parameters that may affect the performance of the model(Explained later). So this model can also serve a smooth algorithm by space and time.
-```{r config}
+##Step 2: Build Weighted KNN
+First, we only consider three features: *Longitude*, *Latitude* and *UMT_time*.  The goal is to predict PM2.5 using data at least 24 hours ago. Also, please notice that we only get data in  limited locations in China(1000+ monitor points).
+<p>
+
+**Step 2.1:** Configurations.  
+Basically, these are parameters that may affect the performance of the model(explained later).
+```{r}
 title<-'KNN: one-week data'   #this is for the output
 data<-week_data
-distance<-2
 #Longitude/Latitude to UMT_time weight ratio
 L2T_weight<-500000000    
-#used for train.kknn
+#parameters used for train.kknn
+distance<-2
 kernel_candidate<-c("rectangular", "triangular", "epanechnikov", "cos", "inv", "gaussian", "optimal")
 kmax<-7
 ```
+<p>
 
-**Step2.2:** Remove NA values and set weights.  
-KNN uses Minkowski distance to compute the distance of two feature vectors. To eliminate the influence of measuring unit and to reflect the relative importance of one feature to another in a feature vector, a weight is assigned to each feature in the vector. *L2T_weight* is the weight ratio of *Longitude* and *Latitude* to *UMT_time*. This parameter is key to the performance of KNN.
-
-```{r preprocess}
+**Step 2.2:** Remove NA values and set weights to features.  
+KNN uses Minkowski distance to compute the distance of two feature vectors. To eliminate the influence of measuring unit and to reflect the relative importance of one feature to another in a feature vector, a weight is assigned to each feature in the vector. *L2T_weight* is the weight ratio of *Longitude* and *Latitude* to *UMT_time*.  
+This parameter is key to the performance of KNN. Actually, if we set *L2T_weight* large enough, space weights much more than time in distance computation. Thus, the selection of k nearest neighbors is equivalent to first selecting the nearest location and then selecting k points of that location nearest in time. We can see that this is similar to some time series models.
+```{r}
 #remove NA values
 data<-data[!is.na(data$UMT_time)&!is.na(data$Longitude)&!is.na(data$Latitude)&!is.na(data$PM2.5),]
 #add weight to Longitude, Latitude and UMT_time
 data$Latitude<-L2T_weight*data$Latitude
 data$Longitude<-L2T_weight*data$Longitude
 ```
+<p>
 
-**Step2.3:** Prepare train, test and build dataset.
+**Step 2.3:** Prepare train, build and test dataset.
+
 * Train dataset is used to train the best KNN.
 * Build dataset is used as training vectors to build the best KNN.
 * Test dataset is used to test the best KNN.
-Data of *max(UMT_time)* is extracted as test dataset and data with *UMT_time* at least 24 hours before *max(UMT_time)* is choosing as build dataset.
-```{r preprocess}
+
+Data of *max(UMT_time)* is extracted as test dataset and data of *UMT_time* at least 24 hours before *max(UMT_time)* is selected as build dataset. In this case, we only use data 24 hour ago to predict *PM2.5* and the test results are valid.
+```{r}
 size<-dim(data)[1]
 max_timestamp = max(data$UMT_time)
 train<-data[data$UMT_time != max_timestamp,]
 test<-data[data$UMT_time == max_timestamp,]
 build<-data[data$UMT_time<max_timestamp-60*60*24,]
 ```
-#train knn using leave-one-out cross validation, to get the best k and kernel
+<p>
+
+**Step 2.4:** Train knn using leave-one-out cross validation, to get the best k and kernel.  
+distance, kernel and kmax are parameters we configured before.
+
+* distance is the parameter of  Minkowski distance.
+* kernel_candidate is the candidate set of kernel functions to weight the neighbors according to their distances.
+* kmax is the max value of k.
+
+```{r}
 library(kknn)
 fit<-train.kknn(PM2.5~Latitude+Longitude+UMT_time, train, kmax = kmax, kernel = kernel_candidate, distance = distance, scale = FALSE)
 best_k<-fit$best.parameters$k
 best_kernel<-fit$best.parameters$kernel
+```
+<p>
 
-#build and test the best model with data 24h before the test data's time
+**Step 2.5:** Build and test the best model with data 24h before the test data's time.
+```{r}
 best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time, build, test, k = best_k, kernel = best_kernel, distance = distance, scale = FALSE)
 residuals<-test$PM2.5-best_fit$fitted.values
 MAE<-mean(abs(residuals[!is.na(residuals)]))
 MSE<-mean(residuals^2)
+```
+<p>
 
-#output the results
+**Step 2.6:** Output the results.  
+```{r}
 output<-function(){
   print('-------Data-------')
   print(paste(title, 'with size',size))
@@ -87,18 +110,29 @@ output<-function(){
   print(paste('Test MSE =', MSE))
   #plot first 200 test dataset
   x<-1:min(100, length(test[,1]))
-  plot(x, best_fit$fitted.values[1:min(100, length(test[,1]))], ylab = 'PM2.5', type = 'l')
+  plot(x, best_fit$fitted.values[1:min(100, length(test[,1]))], ylab = 'PM2.5', xlab = NA, xlim = c(1,120), type = 'l')
   lines(x, test$PM2.5[1:min(100, length(test[,1]))], col = 4, lty = 2)
   title('Test dataset fitted vs true')
-  #legend('topleft', c('True value','Fitted value'), col = c(1,4), lty = c(1,2),          merge = TRUE, cex = 0.8, xpd = TRUE)
+  legend('topright', c('True value','Fitted value'), col = c(1,4), lty = c(1,2), merge = TRUE, cex = 0.8, xpd = TRUE)
   }
-  
-```{r code}
-#output()
-head(test)
 ```
 
-#Use another dataset to test
+```{r, fig.height= 3}
+output()
+```
+
+<p>
+In-sample MAE = `r min(fit$MEAN.ABS)`
+Test MAE = `r MAE`
+shows good performance.
+<p>
+
+**Step 2.7:** Step back to **Step 2.1** and adjust the parameters to get better performance. After several iterations, relatively good parameters can be found.
+<p>
+
+**Step 2.8:** Use another dataset to test the model.  
+In order to test the generalization capability of the model, it is applied to data of another independent dataset. data of 2014-12-01 to 2014-12-08 is chosen as the test set.
+```{r}
 #preprocess
 week_data2<-total_data[total_data$UMT_time>=as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S"))&total_data$UMT_time<as.numeric(as.POSIXct("20141208000000", format = "%Y%m%d%H%M%S")),]
 datasetname<-'week_data2'
@@ -115,15 +149,35 @@ best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time, build, test, k = best_k, kerne
 residuals<-test$PM2.5-best_fit$fitted.values
 MAE<-mean(abs(residuals[!is.na(residuals)]))
 MSE<-mean(residuals^2)
-output()
 
-######STEP 3: Consider Temperature, DewPoint, Pressure, Humidity, Wind######
-#correlation
+```{r, , fig.height= 3}
+output()
+```
+
+<p>
+
+Test MAE = `r MAE` shows good performance.
+
+##STEP 3: Consider weather factors i.e. *Temperature*, *DewPoint*, *Pressure*, *Humidity*, *Wind*
+**Step 3.1:** Correlation of *Temperature*, *DewPoint*, *Pressure*, *Humidity*, *Wind* and *residuals* of KNN model.
+```{r, message = FALSE}
 test_residuals<-cbind(test[12:16],residuals)
 cor(test_residuals, use = 'pairwise.complete.obs', method = 'pearson')
+
+```{r, message = FALSE, fig.height= 5}
 library(corrgram)
 corrgram(test_residuals)
+```
 
+<p>
+
+There isn't a strong correlation between *residuals* and weather factors, especially between *residuals* and *Wind*. Also, we notice a strong correlation between *Temperature* and *DewPoint*.  
+Hence, we add in *Temperature*, *Pressure* and *Humidity* to the model.
+<p>
+
+**Step 3.2:** Configure and prepare train, build and test datasets.
+Notice that *Tem2T_weight*, *P2T_weight* and *H2T_weight* are additional parameters similar to *L2T_weight*.
+```{r}
 #config
 title<-'KNN with weather factors: one-week data'   #this is for the output
 data<-week_data
@@ -140,7 +194,6 @@ kmax<-7
 #remove NA values
 data<-data[!is.na(data$UMT_time)&!is.na(data$Longitude)&!is.na(data$Latitude)&!is.na(data$PM2.5)&!is.na(data$Temperature)&!is.na(data$Pressure)&!is.na(data$Humidity),]
 
-
 #add weight to Factors and UMT_time
 data$Latitude<-L2T_weight*data$Latitude
 data$Longitude<-L2T_weight*data$Longitude
@@ -154,19 +207,29 @@ max_timestamp = max(data$UMT_time)
 train<-data[data$UMT_time != max_timestamp,]
 test<-data[data$UMT_time == max_timestamp,]
 build<-data[data$UMT_time<max_timestamp-60*60*24,]
+```
+<p>
 
-#train knn using leave-one-out cross validation, to get the best k and kernel
+**Step 3.3:** Train knn using leave-one-out cross validation.
+```{r}
 library(kknn)
 fit<-train.kknn(PM2.5~Latitude+Longitude+UMT_time+Temperature+Pressure+Humidity, train, kmax = kmax, kernel = kernel_candidate, distance = distance, scale = FALSE)
 best_k<-fit$best.parameters$k
 best_kernel<-fit$best.parameters$kernel
+```
+<p>
 
-#build and test the best model with data 24h before the test data's time
+**Step 3.4:** Build and test the best model with data 24h before the test data's time.
+```{r}
 best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time+Temperature+Pressure+Humidity, build, test, k = best_k, kernel = best_kernel, distance = distance, scale = FALSE)
 residuals<-test$PM2.5-best_fit$fitted.values
 MAE<-mean(abs(residuals[!is.na(residuals)]))
 MSE<-mean(residuals^2)
+```
+<p>
 
+**Step 3.5:** Output (updated)
+```{r}
 #update the output of the results
 output<-function(){
   print('-------Data-------')
@@ -187,14 +250,30 @@ output<-function(){
   print(paste('Test MSE =', MSE))
   #plot first 200 test dataset
   x<-1:min(100, length(test[,1]))
-  plot(x, best_fit$fitted.values[1:min(100, length(test[,1]))], ylab = 'PM2.5', type = 'l')
+  plot(x, best_fit$fitted.values[1:min(100, length(test[,1]))], ylab = 'PM2.5', xlab = NA, xlim = c(1,120), type = 'l')
   lines(x, test$PM2.5[1:min(100, length(test[,1]))], col = 4, lty = 2)
   title('Test dataset fitted vs true')
-  #legend('topleft', c('True value','Fitted value'), col = c(1,4), lty = c(1,2),          merge = TRUE, cex = 0.8, xpd = TRUE)
+  legend('topright', c('True value','Fitted value'), col = c(1,4), lty = c(1,2), merge = TRUE, cex = 0.8, xpd = TRUE)
 }
-output()
+```
 
-#Use another dataset to test
+```{r, fig.height= 3}
+output()
+```
+
+<P>
+
+In-sample MAE = `r min(fit$MEAN.ABS)`
+Test MAE = `r MAE`
+shows better performance than the previous model. But we can notice over-fitting as the gap between In-sample MAE and Test MAE = `r MAE` is quite large.
+
+<p>
+
+**Step 3.6:** Step back to **Step 3.2** and adjust the parameters to get better performance.
+<p>
+
+**Step 3.7:** Use another dataset to test.
+```{r}
 #preprocess
 week_data2<-total_data[total_data$UMT_time>=as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S"))&total_data$UMT_time<as.numeric(as.POSIXct("20141208000000", format = "%Y%m%d%H%M%S")),]
 datasetname<-'week_data2'
@@ -214,7 +293,12 @@ best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time+Temperature+Pressure+Humidity, 
 residuals<-test$PM2.5-best_fit$fitted.values
 MAE<-mean(abs(residuals[!is.na(residuals)]))
 MSE<-mean(residuals^2)
+```
 
-
+```{r, fig.height= 3}
 output()
+```
 
+<P>
+
+Test MAE = `r MAE` shows better performance than the previous model.
