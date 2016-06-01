@@ -1,5 +1,5 @@
-# KNN_air_pollution
-a KNN model for air pollution data
+# Weighted KNN_air_pollution
+a weighted KNN model for air pollution data
 
 ##KNN-time and space
 
