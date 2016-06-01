@@ -1,0 +1,215 @@
+---
+title: "KNN for air pollution data"
+author: "yingzhi"
+---
+
+##Step 1: Preprocessing
+UMT_time is converted to timestamp(POSIXct). Also, subsetting by time and space can be done for further analysis.
+```{r preprocess}
+#import the datase
+total_data<-read.csv('airdata.csv', encoding = 'UTF-8')
+#convert UMT_time to timestamp
+total_data$UMT_time<-as.numeric(as.POSIXct(as.character(total_data$UMT_time), format = "%Y%m%d%H%M%S"))
+#convert to numeriec
+total_data[,c(6:13,15,16)]<-sapply(total_data[,c(6:13,15,16)] , function(x){as.numeric(as.character(x))})
+#subset
+subarea_data<-total_data[total_data$Latitude>35&total_data$Latitude<40&total_data$Longitude>115&total_data$Longitude<120,]
+week_data<-total_data[total_data$UMT_time>=as.numeric(as.POSIXct("20141224000000", format = "%Y%m%d%H%M%S"))&total_data$UMT_time<as.numeric(as.POSIXct("20141231000000", format = "%Y%m%d%H%M%S")),]
+month_data<-total_data[total_data$UMT_time>=as.numeric(as.POSIXct("20141101000000", format = "%Y%m%d%H%M%S"))&total_data$UMT_time<as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S")),]
+subarea_week_data<-subarea_data[subarea_data$UMT_time>=as.numeric(as.POSIXct("20141224000000", format = "%Y%m%d%H%M%S"))&subarea_data$UMT_time<as.numeric(as.POSIXct("20141231000000", format = "%Y%m%d%H%M%S")),]
+subarea_month_data<-subarea_data[subarea_data$UMT_time>=as.numeric(as.POSIXct("20141101000000", format = "%Y%m%d%H%M%S"))&subarea_data$UMT_time<as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S")),]
+```
+
+##Step 2: Build KNN
+**Step2.1:** Some configurations are needed. Basically, these are parameters that may affect the performance of the model(Explained later).
+```{r config}
+title<-'KNN: one-week data'   #this is for the output
+data<-week_data
+distance<-2
+#Longitude/Latitude to UMT_time weight ratio
+L2T_weight<-500000000    
+#used for train.kknn
+kernel_candidate<-c("rectangular", "triangular", "epanechnikov", "cos", "inv", "gaussian", "optimal")
+kmax<-7
+```
+
+**Step2.2:** Remove NA values and set weights. L2T_weight
+```
+#remove NA values
+data<-data[!is.na(data$UMT_time)&!is.na(data$Longitude)&!is.na(data$Latitude)&!is.na(data$PM2.5),]
+#add weight to Longitude, Latitude and UMT_time
+data$Latitude<-L2T_weight*data$Latitude
+data$Longitude<-L2T_weight*data$Longitude
+```
+
+```
+#prepare train, test(choose the latest day layer) and build(24h before test data's time)
+size<-dim(data)[1]
+# test_index<-sample(1:size, size = min(round(size/5),2000), replace = FALSE, prob = rep(1/size, size))
+# train<-data[-test_index,]
+# test<-data[test_index,]
+max_timestamp = max(data$UMT_time)
+train<-data[data$UMT_time != max_timestamp,]
+test<-data[data$UMT_time == max_timestamp,]
+build<-data[data$UMT_time<max_timestamp-60*60*24,]
+```
+#train knn using leave-one-out cross validation, to get the best k and kernel
+library(kknn)
+fit<-train.kknn(PM2.5~Latitude+Longitude+UMT_time, train, kmax = kmax, kernel = kernel_candidate, distance = distance, scale = FALSE)
+best_k<-fit$best.parameters$k
+best_kernel<-fit$best.parameters$kernel
+
+#build and test the best model with data 24h before the test data's time
+best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time, build, test, k = best_k, kernel = best_kernel, distance = distance, scale = FALSE)
+residuals<-test$PM2.5-best_fit$fitted.values
+MAE<-mean(abs(residuals[!is.na(residuals)]))
+MSE<-mean(residuals^2)
+
+#output the results
+output<-function(){
+  print('-------Data-------')
+  print(paste(title, 'with size',size))
+  print('-------Parameters-------')
+  print(paste('L2T_weight =', L2T_weight))
+  print(paste('distance parameter=', distance))
+  print(paste('k =', best_k))
+  print(paste('kernel =', best_kernel))
+  print('-------In-sample errors-------')
+  print(paste('In-sample MAE =', min(fit$MEAN.ABS)))
+  print(paste('In-sample MSE =', min(fit$MEAN.SQU)))
+  print('-------Test dataset errors-------')
+  print(paste('Test MAE =', MAE))
+  print(paste('Test MSE =', MSE))
+  #plot first 200 test dataset
+  x<-1:min(100, length(test[,1]))
+  plot(x, best_fit$fitted.values[1:min(100, length(test[,1]))], ylab = 'PM2.5', type = 'l')
+  lines(x, test$PM2.5[1:min(100, length(test[,1]))], col = 4, lty = 2)
+  title('Test dataset fitted vs true')
+  #legend('topleft', c('True value','Fitted value'), col = c(1,4), lty = c(1,2),          merge = TRUE, cex = 0.8, xpd = TRUE)
+  }
+  
+```{r code}
+#output()
+head(test)
+```
+
+#Use another dataset to test
+#preprocess
+week_data2<-total_data[total_data$UMT_time>=as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S"))&total_data$UMT_time<as.numeric(as.POSIXct("20141208000000", format = "%Y%m%d%H%M%S")),]
+datasetname<-'week_data2'
+data<-week_data2
+data<-data[!is.na(data$UMT_time)&!is.na(data$Longitude)&!is.na(data$Latitude)&!is.na(data$PM2.5),]
+data$Latitude<-L2T_weight*data$Latitude
+data$Longitude<-L2T_weight*data$Longitude
+size<-dim(data)[1]
+max_timestamp = max(data$UMT_time)
+test<-data[data$UMT_time == max_timestamp,]
+build<-data[data$UMT_time<max_timestamp-60*60*24,]
+#build KNN and test
+best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time, build, test, k = best_k, kernel = best_kernel, distance = distance, scale = FALSE)
+residuals<-test$PM2.5-best_fit$fitted.values
+MAE<-mean(abs(residuals[!is.na(residuals)]))
+MSE<-mean(residuals^2)
+output()
+
+######STEP 3: Consider Temperature, DewPoint, Pressure, Humidity, Wind######
+#correlation
+test_residuals<-cbind(test[12:16],residuals)
+cor(test_residuals, use = 'pairwise.complete.obs', method = 'pearson')
+library(corrgram)
+corrgram(test_residuals)
+
+#config
+title<-'KNN with weather factors: one-week data'   #this is for the output
+data<-week_data
+distance<-2
+#Factors to UMT_time weight ratio
+L2T_weight<-500000000    #Longitude/Latitude to UMT_time weight ratio
+Tem2T_weight<-1000000
+P2T_weight<-1000000
+H2T_weight<-1000000
+#used for train.kknn
+kernel_candidate<-c("rectangular", "triangular", "epanechnikov", "cos", "inv", "gaussian", "optimal")
+kmax<-7
+
+#remove NA values
+data<-data[!is.na(data$UMT_time)&!is.na(data$Longitude)&!is.na(data$Latitude)&!is.na(data$PM2.5)&!is.na(data$Temperature)&!is.na(data$Pressure)&!is.na(data$Humidity),]
+
+
+#add weight to Factors and UMT_time
+data$Latitude<-L2T_weight*data$Latitude
+data$Longitude<-L2T_weight*data$Longitude
+data$Temperature<-Tem2T_weight*data$Temperature
+data$Pressure<-P2T_weight*data$Pressure
+data$Humidity<-H2T_weight*data$Humidity
+
+#prepare train, test(choose the latest day layer) and build(24h before test data's time)
+size<-dim(data)[1]
+max_timestamp = max(data$UMT_time)
+train<-data[data$UMT_time != max_timestamp,]
+test<-data[data$UMT_time == max_timestamp,]
+build<-data[data$UMT_time<max_timestamp-60*60*24,]
+
+#train knn using leave-one-out cross validation, to get the best k and kernel
+library(kknn)
+fit<-train.kknn(PM2.5~Latitude+Longitude+UMT_time+Temperature+Pressure+Humidity, train, kmax = kmax, kernel = kernel_candidate, distance = distance, scale = FALSE)
+best_k<-fit$best.parameters$k
+best_kernel<-fit$best.parameters$kernel
+
+#build and test the best model with data 24h before the test data's time
+best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time+Temperature+Pressure+Humidity, build, test, k = best_k, kernel = best_kernel, distance = distance, scale = FALSE)
+residuals<-test$PM2.5-best_fit$fitted.values
+MAE<-mean(abs(residuals[!is.na(residuals)]))
+MSE<-mean(residuals^2)
+
+#update the output of the results
+output<-function(){
+  print('-------Data-------')
+  print(paste(datasetname, 'with size',size))
+  print('-------Parameters-------')
+  print(paste('L2T_weight =', L2T_weight))
+  print(paste('Tem2T_weight =', Tem2T_weight))
+  print(paste('P2T_weight =', P2T_weight))
+  print(paste('H2T_weight =', H2T_weight))
+  print(paste('distance parameter=', distance))
+  print(paste('k =', best_k))
+  print(paste('kernel =', best_kernel))
+  print('-------In-sample errors-------')
+  print(paste('In-sample MAE =', min(fit$MEAN.ABS)))
+  print(paste('In-sample MSE =', min(fit$MEAN.SQU)))
+  print('-------Test dataset errors-------')
+  print(paste('Test MAE =', MAE))
+  print(paste('Test MSE =', MSE))
+  #plot first 200 test dataset
+  x<-1:min(100, length(test[,1]))
+  plot(x, best_fit$fitted.values[1:min(100, length(test[,1]))], ylab = 'PM2.5', type = 'l')
+  lines(x, test$PM2.5[1:min(100, length(test[,1]))], col = 4, lty = 2)
+  title('Test dataset fitted vs true')
+  #legend('topleft', c('True value','Fitted value'), col = c(1,4), lty = c(1,2),          merge = TRUE, cex = 0.8, xpd = TRUE)
+}
+output()
+
+#Use another dataset to test
+#preprocess
+week_data2<-total_data[total_data$UMT_time>=as.numeric(as.POSIXct("20141201000000", format = "%Y%m%d%H%M%S"))&total_data$UMT_time<as.numeric(as.POSIXct("20141208000000", format = "%Y%m%d%H%M%S")),]
+datasetname<-'week_data2'
+data<-week_data2
+data<-data[!is.na(data$UMT_time)&!is.na(data$Longitude)&!is.na(data$Latitude)&!is.na(data$PM2.5)&!is.na(data$Temperature)&!is.na(data$Pressure)&!is.na(data$Humidity),]
+data$Latitude<-L2T_weight*data$Latitude
+data$Longitude<-L2T_weight*data$Longitude
+data$Temperature<-Tem2T_weight*data$Temperature
+data$Pressure<-P2T_weight*data$Pressure
+data$Humidity<-H2T_weight*data$Humidity
+size<-dim(data)[1]
+max_timestamp = max(data$UMT_time)
+test<-data[data$UMT_time == max_timestamp,]
+build<-data[data$UMT_time<max_timestamp-60*60*24,]
+#build KNN and test
+best_fit<-kknn(PM2.5~Latitude+Longitude+UMT_time+Temperature+Pressure+Humidity, build, test, k = best_k, kernel = best_kernel, distance = distance, scale = FALSE)
+residuals<-test$PM2.5-best_fit$fitted.values
+MAE<-mean(abs(residuals[!is.na(residuals)]))
+MSE<-mean(residuals^2)
+
+
+output()
+
