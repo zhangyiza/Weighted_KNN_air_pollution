@@ -1,6 +1,6 @@
 ---
 title: "Weighted KNN for air pollution data"
-output: pdf_document
+output: html_document
 ---
 Weighted k-Nearest Neighbor is used to model the air pollution data. PM2.5 is predicted with the k nearest training set vectors (according to Minkowski distance). Kernel functions are used to weight the neighbors according to their distances.  
 Both location and time are considered as features in this model. Actually, this model is similar to some space and time series model in some condition. This model can also serve as a smooth algorithm by space and time.
